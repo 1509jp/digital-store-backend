@@ -26,9 +26,10 @@ const ProductOption = sequelize.define('ProductOption', {
   },
 
   shape: {
-    type: DataTypes.ENUM('square', 'circle'),
-    allowNull: false,
-  },
+  type: DataTypes.ENUM('square', 'circle'),
+  allowNull: false,
+  defaultValue: 'square',
+},
 
   radius: {
     type: DataTypes.INTEGER,
@@ -37,9 +38,10 @@ const ProductOption = sequelize.define('ProductOption', {
   },
 
   type: {
-    type: DataTypes.ENUM('text', 'color'),
-    allowNull: false,
-  },
+  type: DataTypes.ENUM('text', 'color'),
+  allowNull: false,
+  defaultValue: 'text',
+},
 
   values: {
     type: DataTypes.TEXT,

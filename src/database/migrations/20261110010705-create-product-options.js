@@ -28,9 +28,10 @@ module.exports = {
       },
 
       shape: {
-        type: Sequelize.ENUM('square', 'circle'),
-        allowNull: false,
-      },
+  type: Sequelize.ENUM('square', 'circle'),
+  allowNull: false,
+  defaultValue: 'square',
+},
 
       radius: {
         type: Sequelize.INTEGER,
@@ -39,9 +40,10 @@ module.exports = {
       },
 
       type: {
-        type: Sequelize.ENUM('text', 'color'),
-        allowNull: false,
-      },
+  type: Sequelize.ENUM('text', 'color'),
+  allowNull: false,
+  defaultValue: 'text',
+},
 
       values: {
         type: Sequelize.TEXT,

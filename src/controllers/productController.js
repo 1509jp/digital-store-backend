@@ -10,6 +10,9 @@ const {
 
 const sequelize = require('../config/database');
 
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
 async function getProductById(req, res) {
   try {
@@ -47,7 +50,33 @@ async function getProductById(req, res) {
       });
     }
 
-    return res.status(200).json(product);
+    const productData = product.toJSON();
+
+const response = {
+  id: productData.id,
+  enabled: productData.enabled,
+  name: productData.name,
+  slug: productData.slug,
+  stock: productData.stock,
+  description: productData.description,
+  price: productData.price,
+  price_with_discount: productData.price_with_discount,
+  category_ids: productData.categories.map((category) => category.id),
+  images: productData.images.map((image) => ({
+    id: image.id,
+    content: image.path,
+  })),
+  options: productData.options.map((option) => ({
+    id: option.id,
+    title: option.title,
+    shape: option.shape,
+    radius: option.radius,
+    type: option.type,
+    values: option.values.split(','),
+  })),
+};
+
+return res.status(200).json(response);
   } catch (error) {
     console.error('Erro ao buscar produto:', error.message);
 
@@ -57,16 +86,24 @@ async function getProductById(req, res) {
   }
 }
 
+
 async function searchProducts(req, res) {
   try {
     const {
-      limit,
-      page,
-      keyword,
-      category_ids,
-      price_range,
-      enabled,
-    } = req.query;
+  limit,
+  page,
+  fields,
+  match,
+  category_ids,
+  enabled,
+} = req.query;
+
+    const price_range = req.query['price-range'];
+
+    // Identificar filtros de opcoes: option[ID]
+const optionFilters = Object.entries(req.query).filter(
+  ([key]) => /^option\[\d+\]$/.test(key)
+);
 
     // Configurar paginacao
     const parsedLimit = Number(limit ?? 12);
@@ -75,8 +112,7 @@ async function searchProducts(req, res) {
     if (
       !Number.isInteger(parsedLimit) ||
       !Number.isInteger(parsedPage) ||
-      parsedLimit < 1 ||
-      parsedLimit > 100 ||
+      (parsedLimit !== -1 && (parsedLimit < 1 || parsedLimit > 100)) ||
       parsedPage < 1
     ) {
       return res.status(400).json({
@@ -84,23 +120,61 @@ async function searchProducts(req, res) {
       });
     }
 
-    const offset = (parsedPage - 1) * parsedLimit;
+    const offset =
+      parsedLimit === -1 ? 0 : (parsedPage - 1) * parsedLimit;
 
     // Configurar filtros
     const where = {};
 
+    // Validar os campos solicitados
+let selectedFields = null;
+
+if (fields !== undefined) {
+  if (typeof fields !== 'string' || !fields.trim()) {
+    return res.status(400).json({
+      message: 'Parametro fields invalido.',
+    });
+  }
+
+  selectedFields = fields.split(',').map((field) => field.trim());
+
+  const allowedFields = [
+    'id',
+    'enabled',
+    'name',
+    'slug',
+    'stock',
+    'description',
+    'price',
+    'price_with_discount',
+    'category_ids',
+    'images',
+    'options',
+  ];
+
+  if (
+    selectedFields.some(
+      (field) => !allowedFields.includes(field)
+    )
+  ) {
+    return res.status(400).json({
+      message: 'Um ou mais campos solicitados sao invalidos.',
+    });
+  }
+}
+
     // Pesquisar pelo nome ou descricao
-    if (keyword !== undefined) {
-      if (typeof keyword !== 'string') {
+    if (match !== undefined) {
+      if (typeof match !== 'string') {
         return res.status(400).json({
-          message: 'Parametro keyword invalido.',
+          message: 'Parametro match invalido.',
         });
       }
 
-      if (keyword.trim()) {
+      if (match.trim()) {
         where[Op.or] = [
-          { name: { [Op.like]: `%${keyword.trim()}%` } },
-          { description: { [Op.like]: `%${keyword.trim()}%` } },
+          { name: { [Op.like]: `%${match.trim()}%` } },
+          { description: { [Op.like]: `%${match.trim()}%` } },
         ];
       }
     }
@@ -128,7 +202,7 @@ async function searchProducts(req, res) {
 
       if (parts.length !== 2) {
         return res.status(400).json({
-          message: 'Use price_range no formato minimo-maximo.',
+          message: 'Use price-range no formato minimo-maximo.',
         });
       }
 
@@ -187,6 +261,68 @@ async function searchProducts(req, res) {
       categoryInclude.required = true;
     }
 
+// Validar os filtros de opcoes
+const parsedOptionFilters = [];
+
+for (const [key, value] of optionFilters) {
+  const optionId = Number(key.match(/\d+/)[0]);
+
+  if (
+    !Number.isSafeInteger(optionId) ||
+    optionId < 1 ||
+    typeof value !== 'string'
+  ) {
+    return res.status(400).json({
+      message: 'Filtro de opcao invalido.',
+    });
+  }
+
+  const values = value.split(',').map((item) => item.trim());
+
+  if (values.some((item) => !item)) {
+    return res.status(400).json({
+      message: 'Valores do filtro de opcao invalidos.',
+    });
+  }
+
+  parsedOptionFilters.push({
+    id: optionId,
+    values,
+  });
+}
+
+// Filtrar produtos pelas opcoes solicitadas
+if (parsedOptionFilters.length > 0) {
+  const matchingIds = [];
+
+  for (const filter of parsedOptionFilters) {
+    const option = await ProductOption.findByPk(filter.id);
+
+    const optionValues = option
+      ? option.values.split(',').map((value) => value.trim())
+      : [];
+
+    const matches = filter.values.some((value) =>
+      optionValues.includes(value)
+    );
+
+    if (!option || !matches) {
+      where.id = { [Op.in]: [] };
+      break;
+    }
+
+    matchingIds.push(option.product_id);
+  }
+
+  if (!where.id) {
+    where.id = {
+      [Op.in]: matchingIds.every((id) => id === matchingIds[0])
+        ? [matchingIds[0]]
+        : [],
+    };
+  }
+}
+
     // Consultar produtos
     const { count, rows } = await Product.findAndCountAll({
       where,
@@ -202,16 +338,58 @@ async function searchProducts(req, res) {
         categoryInclude,
       ],
       distinct: true,
-      limit: parsedLimit,
-      offset,
+      ...(parsedLimit === -1
+        ? {}
+        : { limit: parsedLimit, offset }),
       order: [['id', 'ASC']],
     });
 
+    // Formatar resposta conforme o enunciado
+    const data = rows.map((product) => {
+      const item = product.toJSON();
+
+      const response = {
+        id: item.id,
+        enabled: item.enabled,
+        name: item.name,
+        slug: item.slug,
+        stock: item.stock,
+        description: item.description,
+        price: item.price,
+        price_with_discount: item.price_with_discount,
+        category_ids: item.categories.map(
+          (category) => category.id
+        ),
+        images: item.images.map((image) => ({
+          id: image.id,
+          content: image.path,
+        })),
+                options: item.options.map((option) => ({
+          id: option.id,
+          title: option.title,
+          shape: option.shape,
+          radius: option.radius,
+          type: option.type,
+          values: option.values.split(','),
+        })),
+      };
+
+      if (selectedFields === null) {
+        return response;
+      }
+
+      return Object.fromEntries(
+        Object.entries(response).filter(([key]) =>
+          key === 'id' || selectedFields.includes(key)
+        )
+      );
+    });
+
     return res.status(200).json({
-      data: rows,
+      data,
       total: count,
       limit: parsedLimit,
-      page: parsedPage,
+      page: parsedLimit === -1 ? 1 : parsedPage,
     });
   } catch (error) {
     console.error('Erro ao pesquisar produtos:', error.message);
@@ -221,15 +399,75 @@ async function searchProducts(req, res) {
     });
   }
 }
+function saveProductImage(image) {
+  if (
+    !image ||
+    typeof image.content !== 'string' ||
+    !['image/png', 'image/jpeg', 'image/webp'].includes(image.type)
+  ) {
+    throw new Error('Imagem invalida.');
+  }
+
+  const base64 = image.content.replace(
+    /^data:image\/(png|jpeg|webp);base64,/,
+    ''
+  );
+
+  if (
+    !base64 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)
+  ) {
+    throw new Error('Conteudo Base64 invalido.');
+  }
+
+  const buffer = Buffer.from(base64, 'base64');
+
+  if (buffer.length === 0 || buffer.length > 5 * 1024 * 1024) {
+    throw new Error('Imagem vazia ou maior que 5 MB.');
+  }
+
+  const extensions = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/webp': 'webp',
+  };
+
+  const filename = `${crypto.randomUUID()}.${extensions[image.type]}`;
+
+  const uploadDir = path.join(__dirname, '../../public/uploads');
+
+  fs.mkdirSync(uploadDir, { recursive: true });
+  fs.writeFileSync(path.join(uploadDir, filename), buffer);
+
+  return `/uploads/${filename}`;
+}
+
+function normalizeRadius(radius) {
+  if (radius === undefined) return 0;
+
+  if (typeof radius === 'string') {
+    if (!/^\d+px$/.test(radius)) return NaN;
+    radius = Number(radius.slice(0, -2));
+  }
+
+  return Number.isSafeInteger(radius) && radius >= 0
+    ? radius
+    : NaN;
+}
+
+function getOptionValues(option) {
+  return option.values ?? option.value;
+}
 
 async function createProduct(req, res) {
 
-let transaction;
+  let transaction;
+  const savedImagePaths = [];
 
   try {
     
 const {
-  enabled = true,
+  enabled = false,
   name,
   slug,
   use_in_menu = false,
@@ -311,9 +549,10 @@ if (
       image !== null &&
       typeof image === 'object' &&
       !Array.isArray(image) &&
-      typeof image.path === 'string' &&
-      image.path.trim().length > 0 &&
-      image.path.length <= 255 &&
+      typeof image.type === 'string' &&
+['image/png', 'image/jpeg', 'image/webp'].includes(image.type) &&
+typeof image.content === 'string' &&
+image.content.trim().length > 0 &&
       (image.enabled === undefined ||
         typeof image.enabled === 'boolean')
   )
@@ -333,10 +572,9 @@ if (
       typeof option.title === 'string' &&
       option.title.trim().length > 0 &&
       option.title.length <= 255 &&
-      ['square', 'circle'].includes(option.shape) &&
-      Number.isSafeInteger(option.radius) &&
-      option.radius >= 0 &&
-      ['text', 'color'].includes(option.type) &&
+      ['square', 'circle'].includes(option.shape ?? 'square') &&
+      Number.isSafeInteger(normalizeRadius(option.radius)) &&
+      ['text', 'color'].includes(option.type ?? 'text') &&
       Array.isArray(option.values) &&
       option.values.length > 0 &&
       option.values.every(
@@ -385,14 +623,19 @@ const product = await Product.create(
 );
 
 if (images.length > 0) {
-  await ProductImage.bulkCreate(
-    images.map((image) => ({
+  const imageRecords = images.map((image) => {
+    const imagePath = saveProductImage(image);
+
+    savedImagePaths.push(imagePath);
+
+    return {
       product_id: product.id,
-      enabled: image.enabled ?? true,
-      path: image.path.trim(),
-    })),
-    { transaction }
-  );
+      enabled: image.enabled ?? false,
+      path: imagePath,
+    };
+  });
+
+  await ProductImage.bulkCreate(imageRecords, { transaction });
 }
 
 if (options.length > 0) {
@@ -400,10 +643,10 @@ if (options.length > 0) {
     options.map((option) => ({
       product_id: product.id,
       title: option.title.trim(),
-      shape: option.shape,
-      radius: option.radius,
-      type: option.type,
-      values: JSON.stringify(option.values),
+      shape: option.shape ?? 'square',
+      radius: normalizeRadius(option.radius),
+      type: option.type ?? 'text',
+      values: getOptionValues(option).join(',')
     })),
     { transaction }
   );
@@ -439,6 +682,24 @@ await transaction.commit();
 if (transaction && !transaction.finished) {
   await transaction.rollback();
 }
+// Remover imagens salvas se o cadastro falhar
+for (const imagePath of transaction?.finished === 'commit' ? [] : savedImagePaths) {
+  try {
+    const filename = path.basename(imagePath);
+    const filePath = path.join(
+      __dirname,
+      '../../public/uploads',
+      filename
+    );
+
+    fs.unlinkSync(filePath);
+  } catch (fileError) {
+    console.error(
+      'Erro ao remover imagem:',
+      fileError.message
+    );
+  }
+}
 
     console.error('Erro ao cadastrar produto:', error.message);
 
@@ -451,6 +712,7 @@ if (transaction && !transaction.finished) {
 
 async function updateProduct(req, res) {
   let transaction;
+  const savedImagePaths = [];
 
   try {
 
@@ -538,16 +800,60 @@ if (hasCategories) {
 }
 
 if (hasImages) {
-  const invalidImage = req.body.images.some((image) =>
-    !image ||
-    typeof image !== 'object' ||
-    Array.isArray(image) ||
-    typeof image.path !== 'string' ||
-    !image.path.trim() ||
-    image.path.length > 255 ||
-    (image.enabled !== undefined &&
-      typeof image.enabled !== 'boolean')
-  );
+  const invalidImage = req.body.images.some((image) => {
+    if (
+      !image ||
+      typeof image !== 'object' ||
+      Array.isArray(image)
+    ) {
+      return true;
+    }
+
+    // Validar o ID, quando informado
+    if (
+      image.id !== undefined &&
+      (!Number.isSafeInteger(image.id) || image.id < 1)
+    ) {
+      return true;
+    }
+
+    // Validar exclusao
+    if (
+      image.deleted !== undefined &&
+      typeof image.deleted !== 'boolean'
+    ) {
+      return true;
+    }
+
+    // Imagem marcada para exclusao
+    if (image.deleted === true) {
+      return image.id === undefined;
+    }
+
+    // Validar enabled, quando informado
+    if (
+      image.enabled !== undefined &&
+      typeof image.enabled !== 'boolean'
+    ) {
+      return true;
+    }
+
+    // Imagem existente sem novo conteudo
+    if (
+      image.id !== undefined &&
+      image.content === undefined &&
+      image.type === undefined
+    ) {
+      return false;
+    }
+
+    // Nova imagem ou substituicao de conteudo
+    return (
+      !['image/png', 'image/jpeg', 'image/webp'].includes(image.type) ||
+      typeof image.content !== 'string' ||
+      !image.content.trim()
+    );
+  });
 
   if (invalidImage) {
     return res.status(400).json({
@@ -557,25 +863,96 @@ if (hasImages) {
 }
 
 if (hasOptions) {
-  const invalidOption = req.body.options.some((option) =>
-    !option ||
-    typeof option !== 'object' ||
-    Array.isArray(option) ||
-    typeof option.title !== 'string' ||
-    !option.title.trim() ||
-    option.title.length > 255 ||
-    !['square', 'circle'].includes(option.shape) ||
-    !Number.isSafeInteger(option.radius) ||
-    option.radius < 0 ||
-    !['text', 'color'].includes(option.type) ||
-    !Array.isArray(option.values) ||
-    option.values.length === 0 ||
-    option.values.some(
-      (value) =>
-        typeof value !== 'string' ||
-        !value.trim()
-    )
-  );
+  const invalidOption = req.body.options.some((option) => {
+    if (
+      !option ||
+      typeof option !== 'object' ||
+      Array.isArray(option)
+    ) {
+      return true;
+    }
+
+    // Validar ID, quando informado
+    if (
+      option.id !== undefined &&
+      (!Number.isSafeInteger(option.id) || option.id < 1)
+    ) {
+      return true;
+    }
+
+    // Validar exclusao
+    if (
+      option.deleted !== undefined &&
+      typeof option.deleted !== 'boolean'
+    ) {
+      return true;
+    }
+
+    if (option.deleted === true) {
+      return option.id === undefined;
+    }
+
+    // Novas opcoes precisam de titulo e valores
+if (
+  option.id === undefined &&
+  (option.title === undefined ||
+   getOptionValues(option) === undefined)
+) {
+  return true;
+}
+
+    // Validar titulo, quando informado
+    if (
+      option.title !== undefined &&
+      (typeof option.title !== 'string' ||
+       !option.title.trim() ||
+       option.title.length > 255)
+    ) {
+      return true;
+    }
+
+    // Validar formato
+    if (
+      option.shape !== undefined &&
+      !['square', 'circle'].includes(option.shape)
+    ) {
+      return true;
+    }
+
+    // Validar raio
+    // Validar raio
+if (
+  option.radius !== undefined &&
+  !Number.isSafeInteger(normalizeRadius(option.radius))
+) {
+  return true;
+}
+
+    // Validar tipo
+    if (
+      option.type !== undefined &&
+      !['text', 'color'].includes(option.type)
+    ) {
+      return true;
+    }
+
+    // Validar valores, quando informados
+    // Validar valores, quando informados
+if (
+  getOptionValues(option) !== undefined &&
+  (!Array.isArray(getOptionValues(option)) ||
+   getOptionValues(option).length === 0 ||
+   getOptionValues(option).some(
+     (value) =>
+       typeof value !== 'string' ||
+       !value.trim()
+   ))
+) {
+  return true;
+}
+
+    return false;
+  });
 
   if (invalidOption) {
     return res.status(400).json({
@@ -691,58 +1068,159 @@ await product.setCategories(categories, { transaction });
 
 
 if (hasImages) {
-  await ProductImage.destroy({
-    where: {
-      product_id: product.id
-    },
-    transaction
-  });
+  for (const image of req.body.images) {
+    if (image.id !== undefined) {
+      const existingImage = await ProductImage.findOne({
+        where: {
+          id: image.id,
+          product_id: product.id
+        },
+        transaction
+      });
 
-  if (req.body.images.length > 0) {
-    await ProductImage.bulkCreate(
-      req.body.images.map((image) => ({
-        product_id: product.id,
-        enabled: image.enabled ?? true,
-        path: image.path.trim()
-      })),
-      { transaction }
-    );
+      if (!existingImage) {
+        await transaction.rollback();
+
+        return res.status(400).json({
+          message: 'Imagem nao encontrada neste produto.'
+        });
+      }
+
+      if (image.deleted === true) {
+        await existingImage.destroy({ transaction });
+        continue;
+      }
+
+      const imageUpdates = {};
+
+      if (image.enabled !== undefined) {
+        imageUpdates.enabled = image.enabled;
+      }
+
+      if (image.content !== undefined) {
+        const imagePath = saveProductImage(image);
+
+        savedImagePaths.push(imagePath);
+        imageUpdates.path = imagePath;
+      }
+
+      await existingImage.update(imageUpdates, { transaction });
+    } else {
+      const imagePath = saveProductImage(image);
+
+      savedImagePaths.push(imagePath);
+
+      await ProductImage.create(
+        {
+          product_id: product.id,
+          enabled: image.enabled ?? false,
+          path: imagePath
+        },
+        { transaction }
+      );
+    }
   }
 }
 
 
 if (hasOptions) {
-  await ProductOption.destroy({
-    where: {
-      product_id: product.id
-    },
-    transaction
-  });
+  for (const option of req.body.options) {
 
-  if (req.body.options.length > 0) {
-    await ProductOption.bulkCreate(
-      req.body.options.map((option) => ({
-        product_id: product.id,
-        title: option.title.trim(),
-        shape: option.shape,
-        radius: option.radius,
-        type: option.type,
-        values: JSON.stringify(option.values)
-      })),
-      { transaction }
-    );
+    // Atualizar ou excluir uma opcao existente
+    if (option.id !== undefined) {
+      const existingOption = await ProductOption.findOne({
+        where: {
+          id: option.id,
+          product_id: product.id
+        },
+        transaction
+      });
+
+      if (!existingOption) {
+        await transaction.rollback();
+
+        return res.status(400).json({
+          message: 'Opcao nao encontrada neste produto.'
+        });
+      }
+
+      if (option.deleted === true) {
+        await existingOption.destroy({ transaction });
+        continue;
+      }
+
+      const optionUpdates = {};
+
+      for (const field of [
+        'title',
+        'shape',
+        'radius',
+        'type'
+      ]) {
+        if (option[field] !== undefined) {
+  optionUpdates[field] =
+    field === 'radius'
+      ? normalizeRadius(option[field])
+      : option[field];
+}
+      }
+
+      if (getOptionValues(option) !== undefined) {
+  optionUpdates.values = getOptionValues(option).join(',');
+}
+
+await existingOption.update(optionUpdates, {
+  transaction
+});
+
+} else {
+
+      // Adicionar uma nova opcao
+      await ProductOption.create(
+        {
+          product_id: product.id,
+          title: option.title.trim(),
+          shape: option.shape ?? 'square',
+          radius: normalizeRadius(option.radius),
+          type: option.type ?? 'text',
+          values: getOptionValues(option).join(',')
+        },
+        { transaction }
+      );
+    }
   }
 }
 
 await transaction.commit();
 
-return res.status(200).json(product);
+return res.status(204).send();
 
   
   } catch (error) {
     if (transaction && !transaction.finished) {
       await transaction.rollback();
     }
+
+    // Remover imagens novas caso a atualizacao falhe
+if (transaction?.finished !== 'commit') {
+  for (const imagePath of savedImagePaths) {
+    try {
+      const filename = path.basename(imagePath);
+      const filePath = path.join(
+        __dirname,
+        '../../public/uploads',
+        filename
+      );
+
+      fs.unlinkSync(filePath);
+    } catch (fileError) {
+      console.error(
+        'Erro ao remover imagem:',
+        fileError.message
+      );
+    }
+  }
+}
 
     console.error('Erro ao atualizar produto:', error.message);
 

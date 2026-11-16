@@ -6,7 +6,7 @@ function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
 
   if (!authHeader) {
-    return res.status(401).json({
+    return res.status(400).json({
       message: 'Token nao fornecido.',
     });
   }
@@ -19,7 +19,7 @@ function authMiddleware(req, res, next) {
     parts[0] !== 'Bearer' ||
     !parts[1]
   ) {
-    return res.status(401).json({
+    return res.status(400).json({
       message: 'Formato de token invalido.',
     });
   }
@@ -40,7 +40,7 @@ function authMiddleware(req, res, next) {
     // Permitir que a requisição continue
     return next();
   } catch (error) {
-    return res.status(401).json({
+    return res.status(400).json({
       message: 'Token invalido ou expirado.',
     });
   }

@@ -174,12 +174,7 @@ async function updateUser(req, res) {
     // Salvar alterações no MySQL
     await user.save();
 
-    return res.status(200).json({
-      id: user.id,
-      firstname: user.firstname,
-      surname: user.surname,
-      email: user.email,
-    });
+    return res.status(204).send();
   } catch (error) {
     console.error('Erro ao atualizar usuario:', error.message);
 

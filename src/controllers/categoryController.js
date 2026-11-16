@@ -91,8 +91,7 @@ async function searchCategories(req, res) {
     if (
       !Number.isInteger(parsedLimit) ||
       !Number.isInteger(parsedPage) ||
-      parsedLimit < 1 ||
-      parsedLimit > 100 ||
+      (parsedLimit !== -1 && (parsedLimit < 1 || parsedLimit > 100)) ||
       parsedPage < 1
     ) {
       return res.status(400).json({
@@ -100,7 +99,7 @@ async function searchCategories(req, res) {
       });
     }
 
-    const offset = (parsedPage - 1) * parsedLimit;
+    const offset = parsedLimit === -1 ? 0 : (parsedPage - 1) * parsedLimit;
 
     // Configurar filtros
     const where = {};
@@ -163,8 +162,7 @@ async function searchCategories(req, res) {
     const { count, rows } = await Category.findAndCountAll({
       where,
       attributes,
-      limit: parsedLimit,
-      offset,
+      ...(parsedLimit === -1 ? {} : { limit: parsedLimit, offset }),
       order: [['id', 'ASC']],
     });
 
@@ -172,7 +170,7 @@ async function searchCategories(req, res) {
       data: rows,
       total: count,
       limit: parsedLimit,
-      page: parsedPage,
+      page: parsedLimit === -1 ? 1 : parsedPage,
     });
   } catch (error) {
     console.error('Erro ao pesquisar categorias:', error.message);
@@ -249,7 +247,7 @@ async function updateCategory(req, res) {
           : category.use_in_menu,
     });
 
-    return res.status(200).json(category);
+    return res.status(204).send();
   } catch (error) {
     console.error('Erro ao atualizar categoria:', error.message);
 

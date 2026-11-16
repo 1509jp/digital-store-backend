@@ -50,26 +50,24 @@ test('GET /v1/product/search deve retornar produtos paginados', async () => {
 });
 
 
-test('DELETE /v1/product/3 sem token deve retornar status 401', async () => {
+test('DELETE /v1/product/3 sem token deve retornar status 400', async () => {
   const response = await request(app)
     .delete('/v1/product/3');
 
-  expect(response.status).toBe(401);
+  expect(response.status).toBe(400);
 });
 
-
-test('PUT /v1/product/3 sem token deve retornar status 401', async () => {
+test('PUT /v1/product/3 sem token deve retornar status 400', async () => {
   const response = await request(app)
     .put('/v1/product/3')
     .send({
       stock: 999
     });
 
-  expect(response.status).toBe(401);
+  expect(response.status).toBe(400);
 });
 
-
-test('POST /v1/product sem token deve retornar status 401', async () => {
+test('POST /v1/product sem token deve retornar status 400', async () => {
   const response = await request(app)
     .post('/v1/product')
     .send({
@@ -80,7 +78,7 @@ test('POST /v1/product sem token deve retornar status 401', async () => {
       price_with_discount: 90
     });
 
-  expect(response.status).toBe(401);
+  expect(response.status).toBe(400);
 });
 
 
