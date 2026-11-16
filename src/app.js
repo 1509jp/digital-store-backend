@@ -2,6 +2,8 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./swagger');
 
 const userRoutes = require('./routes/userRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
@@ -16,6 +18,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use('/uploads', express.static(
   path.join(__dirname, '../public/uploads')
 ));
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Rota inicial
 app.get('/', (req, res) => {

@@ -109,3 +109,15 @@ Authorization: Bearer SEU_TOKEN
 ## Projeto acadêmico
 
 Desenvolvido para fins educacionais no curso Geração Tech — Desenvolvimento Web Full Stack.
+
+## Documentação da API
+
+A documentação interativa foi desenvolvida com Swagger UI e OpenAPI 3.0.
+
+Após iniciar o servidor, acesse:
+
+http://localhost:3000/api-docs
+
+A documentação apresenta os endpoints de usuários, autenticação, categorias e produtos, incluindo parâmetros, exemplos de requisições e códigos de resposta.
+
+Para utilizar rotas protegidas, obtenha um token JWT pelo endpoint `POST /v1/user/token` e informe-o no botão **Authorize** do Swagger.
